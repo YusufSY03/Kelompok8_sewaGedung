@@ -32,21 +32,56 @@ if (isset($_POST['add_customer'])) {
         $stmt_check->store_result();
 
         if ($stmt_check->num_rows > 0) {
-            $pesan = "Email customer sudah terdaftar!";
+            $pesan = "Email sudah terdaftar. Gunakan email lain.";
             $pesan_tipe = "danger";
         } else {
-            // Masukkan data customer baru
-            $stmt_insert = $conn->prepare("INSERT INTO customer (nama, email, telepon, alamat) VALUES (?, ?, ?, ?)");
-            $stmt_insert->bind_param("ssss", $nama, $email, $telepon, $alamat);
-
-            if ($stmt_insert->execute()) {
-                $pesan = "Customer berhasil ditambahkan!";
+            $stmt = $conn->prepare("INSERT INTO customer (nama, email, telepon, alamat) VALUES (?, ?, ?, ?)");
+            $stmt->bind_param("ssss", $nama, $email, $telepon, $alamat);
+            if ($stmt->execute()) {
+                $pesan = "Customer baru berhasil ditambahkan!";
                 $pesan_tipe = "success";
             } else {
-                $pesan = "Error: " . $stmt_insert->error;
+                $pesan = "Gagal menambahkan customer: " . $stmt->error;
                 $pesan_tipe = "danger";
             }
-            $stmt_insert->close();
+            $stmt->close();
+        }
+        $stmt_check->close();
+    }
+}
+
+// Logika untuk mengupdate customer
+if (isset($_POST['edit_customer'])) {
+    $id = intval($_POST['edit_id']);
+    $nama = trim($_POST['edit_nama']);
+    $email = trim($_POST['edit_email']);
+    $telepon = trim($_POST['edit_telepon']);
+    $alamat = trim($_POST['edit_alamat']);
+
+    if (empty($nama) || empty($email)) {
+        $pesan = "Nama dan Email harus diisi!";
+        $pesan_tipe = "danger";
+    } else {
+        // Cek apakah email sudah terdaftar untuk customer lain
+        $stmt_check = $conn->prepare("SELECT id FROM customer WHERE email = ? AND id != ?");
+        $stmt_check->bind_param("si", $email, $id);
+        $stmt_check->execute();
+        $stmt_check->store_result();
+
+        if ($stmt_check->num_rows > 0) {
+            $pesan = "Email sudah terdaftar untuk customer lain. Gunakan email lain.";
+            $pesan_tipe = "danger";
+        } else {
+            $stmt = $conn->prepare("UPDATE customer SET nama = ?, email = ?, telepon = ?, alamat = ? WHERE id = ?");
+            $stmt->bind_param("ssssi", $nama, $email, $telepon, $alamat, $id);
+            if ($stmt->execute()) {
+                $pesan = "Data customer berhasil diperbarui!";
+                $pesan_tipe = "success";
+            } else {
+                $pesan = "Gagal memperbarui customer: " . $stmt->error;
+                $pesan_tipe = "danger";
+            }
+            $stmt->close();
         }
         $stmt_check->close();
     }
@@ -54,43 +89,38 @@ if (isset($_POST['add_customer'])) {
 
 // Logika untuk menghapus customer
 if (isset($_GET['action']) && $_GET['action'] == 'delete' && isset($_GET['id'])) {
-    $customer_id = intval($_GET['id']); // Pastikan ID adalah integer
+    $id = intval($_GET['id']);
+    // Cek apakah customer memiliki booking terkait
+    $stmt_check_booking = $conn->prepare("SELECT COUNT(*) FROM booking WHERE customer_id = ?");
+    $stmt_check_booking->bind_param("i", $id);
+    $stmt_check_booking->execute();
+    $stmt_check_booking->bind_result($booking_count);
+    $stmt_check_booking->fetch();
+    $stmt_check_booking->close();
 
-    $stmt_delete = $conn->prepare("DELETE FROM customer WHERE id = ?");
-    $stmt_delete->bind_param("i", $customer_id);
-
-    if ($stmt_delete->execute()) {
-        $pesan = "Customer dan semua pemesanannya berhasil dihapus.";
-        $pesan_tipe = "success";
-    } else {
-        $pesan = "Gagal menghapus customer: " . $stmt_delete->error;
+    if ($booking_count > 0) {
+        $pesan = "Gagal menghapus customer: Customer ini memiliki booking terkait. Harap hapus booking terkait terlebih dahulu.";
         $pesan_tipe = "danger";
+    } else {
+        $stmt = $conn->prepare("DELETE FROM customer WHERE id = ?");
+        $stmt->bind_param("i", $id);
+        if ($stmt->execute()) {
+            $pesan = "Customer berhasil dihapus!";
+            $pesan_tipe = "success";
+        } else {
+            $pesan = "Gagal menghapus customer: " . $stmt->error;
+            $pesan_tipe = "danger";
+        }
+        $stmt->close();
     }
-    $stmt_delete->close();
 }
 
-
-$search_query = "";
-if (isset($_GET['search'])) {
-    $search_query = $_GET['search'];
-}
-
-// Query untuk menampilkan customer
-$sql = "SELECT id, nama, email, telepon, alamat FROM customer";
-if (!empty($search_query)) {
-    $sql .= " WHERE nama LIKE ? OR email LIKE ? OR telepon LIKE ?";
-    $search_param = "%" . $search_query . "%";
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param("sss", $search_param, $search_param, $search_param);
-    $stmt->execute();
-    $result = $stmt->get_result();
-} else {
-    $result = $conn->query($sql);
-}
-
+// Ambil semua data customer
+$sql = "SELECT * FROM customer ORDER BY id DESC";
+$result = $conn->query($sql);
 $customers = [];
-if ($result && $result->num_rows > 0) {
-    while($row = $result->fetch_assoc()) {
+if ($result->num_rows > 0) {
+    while ($row = $result->fetch_assoc()) {
         $customers[] = $row;
     }
 }
@@ -103,137 +133,164 @@ $conn->close();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kelola Customer</title>
+    <title>Kelola Customer - SCC Admin</title>
     <link rel="stylesheet" type="text/css" href="../css/bootstrap.css" />
     <link href="../css/font-awesome.min.css" rel="stylesheet" />
     <link href="../css/style.css" rel="stylesheet" />
     <link href="../css/responsive.css" rel="stylesheet" />
     <style>
-        .alert {
-            padding: 10px;
-            margin-bottom: 20px;
-            border-radius: 5px;
-        }
-        .alert-success {
-            background-color: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        .alert-danger {
-            background-color: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        .sidebar {
-            height: 100%;
-            width: 250px;
-            position: fixed;
-            top: 0;
-            left: 0;
-            background-color: #333;
-            padding-top: 60px;
-            color: white;
-        }
-        .sidebar a {
-            padding: 10px 15px;
-            text-decoration: none;
-            font-size: 18px;
-            color: white;
-            display: block;
-        }
-        .sidebar a:hover {
-            background-color: #575757;
-        }
-        .sidebar .active {
-            background-color: #007bff;
-        }
-        .content {
-            margin-left: 260px; /* Sesuaikan dengan lebar sidebar */
-            padding: 20px;
-        }
-        .card {
-            background-color: #fff;
+        body { background-color: #f8f9fa; }
+        .wrapper { display: flex; }
+        .sidebar { width: 250px; height: 100vh; background-color: #343a40; padding-top: 20px; color: white; position: fixed; } /* Fixed sidebar */
+        .sidebar a { color: white; padding: 10px 15px; text-decoration: none; display: block; }
+        .sidebar a:hover { background-color: #007bff; }
+        .content { flex-grow: 1; padding: 20px; margin-left: 250px; } /* Adjust content margin for fixed sidebar */
+        .navbar { background-color: #ffffff; border-bottom: 1px solid #dee2e6; }
+        .info-section { /* Container umum untuk form dan tabel */
+            background-color: #ffffff;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,.1);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             padding: 20px;
             margin-bottom: 20px;
         }
-        .card h3 {
-            margin-bottom: 20px;
-            color: #333;
+        .info-section h4 {
+            color: #343a40;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 5px;
+        }
+        /* Tambahan styling untuk pesan notifikasi */
+        .alert-custom {
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-radius: 0.25rem;
+            font-weight: bold;
+        }
+        .alert-success-custom {
+            color: #155724;
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+        }
+        .alert-danger-custom {
+            color: #721c24;
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+        }
+        .table thead th {
+            background-color: #007bff;
+            color: white;
+        }
+        .table-striped tbody tr:nth-of-type(odd) {
+            background-color: rgba(0, 123, 255, 0.05);
+        }
+        .btn-custom-add {
+            background-color: #28a745;
+            color: white;
+        }
+        .btn-custom-add:hover {
+            background-color: #218838;
+            color: white;
         }
     </style>
 </head>
-<body>
-    <div class="sidebar">
-        <a href="dashboard_admin.php">Dashboard</a>
-        <a href="kelola_pemesanan.php">Kelola Pemesanan</a>
-        <a href="kelola_customer.php" class="active">Kelola Customer</a>
-        <?php if ($role_logged_in === 'superadmin'): ?>
-            <a href="kelola_user.php">Kelola User</a>
-        <?php endif; ?>
-        <a href="../logout.php">Logout</a>
+<body class="sub_page">
+
+    <div class="hero_area">
+        <header class="header_section">
+            <div class="container-fluid">
+                <nav class="navbar navbar-expand-lg custom_nav-container ">
+                    <a class="navbar-brand" href="dashboard_admin.php">
+                        <span>SCC Admin</span>
+                    </a>
+
+                    <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarSupportedContent" aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
+                        <span class=""> </span>
+                    </button>
+
+                    <div class="collapse navbar-collapse" id="navbarSupportedContent">
+                        <ul class="navbar-nav  mx-auto">
+                        </ul>
+                        <div class="user_option">
+                            <a href="#" class="user_link">
+                                <i class="fa fa-user" aria-hidden="true"></i> <?php echo $username_logged_in; ?> (<?php echo ucfirst($role_logged_in); ?>)
+                            </a>
+                            <a href="../logout.php" class="order_online">
+                                Logout
+                            </a>
+                        </div>
+                    </div>
+                </nav>
+            </div>
+        </header>
     </div>
 
-    <div class="content">
-        <div class="container-fluid">
-            <h2 class="mt-4 mb-4">Kelola Customer</h2>
-            <p>Selamat datang, <?php echo $username_logged_in; ?> (Role: <?php echo $role_logged_in; ?>)</p>
+    <div class="wrapper">
+        <nav id="sidebar" class="sidebar">
+            <ul class="list-unstyled components">
+                <li><a href="dashboard_admin.php">Dashboard</a></li>
+                <li><a href="kelola_pemesanan.php">Kelola Pemesanan</a></li>
+                <li><a href="kelola_customer.php">Kelola Customer</a></li>
+                <?php if ($role_logged_in == 'superadmin'): ?>
+                <li><a href="kelola_user.php">Kelola User</a></li>
+                <?php endif; ?>
+            </ul>
+        </nav>
 
-            <?php if (!empty($pesan)) : ?>
-                <div class="alert alert-<?php echo $pesan_tipe; ?> text-center">
+        <div id="content" class="content">
+            <h2 class="mb-4">Kelola Customer</h2>
+
+            <?php if (!empty($pesan)): ?>
+                <div class="alert alert-dismissible fade show alert-custom alert-<?php echo $pesan_tipe; ?>-custom" role="alert">
                     <?php echo $pesan; ?>
+                    <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
                 </div>
             <?php endif; ?>
 
-            <div class="card mb-4">
-                <h3>Tambah Customer Baru</h3>
-                <form action="kelola_customer.php" method="POST">
-                    <input type="hidden" name="add_customer" value="1">
-                    <div class="form-group">
-                        <label for="nama">Nama Lengkap:</label>
-                        <input type="text" id="nama" name="nama" class="form-control" required>
+            <div class="info-section mt-4">
+                <h4>Tambah Customer Baru</h4>
+                <form action="kelola_customer.php" method="POST" class="mb-4">
+                    <div class="form-row">
+                        <div class="form-group col-md-6">
+                            <label for="nama">Nama Customer:</label>
+                            <input type="text" class="form-control" id="nama" name="nama" required>
+                        </div>
+                        <div class="form-group col-md-6">
+                            <label for="email">Email:</label>
+                            <input type="email" class="form-control" id="email" name="email" required>
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label for="email">Email:</label>
-                        <input type="email" id="email" name="email" class="form-control" required>
+                    <div class="form-row">
+                        <div class="form-group col-md-6">
+                            <label for="telepon">Telepon:</label>
+                            <input type="text" class="form-control" id="telepon" name="telepon">
+                        </div>
+                        <div class="form-group col-md-6">
+                            <label for="alamat">Alamat:</label>
+                            <input type="text" class="form-control" id="alamat" name="alamat">
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label for="telepon">Telepon (Opsional):</label>
-                        <input type="text" id="telepon" name="telepon" class="form-control">
-                    </div>
-                    <div class="form-group">
-                        <label for="alamat">Alamat (Opsional):</label>
-                        <textarea id="alamat" name="alamat" class="form-control" rows="3"></textarea>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Tambah Customer</button>
+                    <button type="submit" name="add_customer" class="btn btn-custom-add">Tambah Customer</button>
                 </form>
             </div>
 
-            <div class="card">
-                <h3>Daftar Customer</h3>
-                <form action="kelola_customer.php" method="GET" class="form-inline mb-3">
-                    <input type="text" name="search" class="form-control mr-2" placeholder="Cari nama, email, telepon..." value="<?php echo htmlspecialchars($search_query); ?>">
-                    <button type="submit" class="btn btn-info">Cari</button>
-                    <?php if (!empty($search_query)): ?>
-                        <a href="kelola_customer.php" class="btn btn-secondary ml-2">Reset</a>
-                    <?php endif; ?>
-                </form>
-
-                <?php if (!empty($customers)): ?>
-                    <div class="table-responsive">
-                        <table class="table table-bordered table-hover">
-                            <thead class="thead-dark">
-                                <tr>
-                                    <th>ID</th>
-                                    <th>Nama</th>
-                                    <th>Email</th>
-                                    <th>Telepon</th>
-                                    <th>Alamat</th>
-                                    <th>Aksi</th>
-                                </tr>
-                            </thead>
-                            <tbody>
+            <div class="info-section mt-4">
+                <h4>Daftar Customer</h4>
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Nama</th>
+                                <th>Email</th>
+                                <th>Telepon</th>
+                                <th>Alamat</th>
+                                <th>Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php if (!empty($customers)): ?>
                                 <?php foreach ($customers as $customer): ?>
                                     <tr>
                                         <td><?php echo htmlspecialchars($customer['id']); ?></td>
@@ -242,68 +299,95 @@ $conn->close();
                                         <td><?php echo htmlspecialchars($customer['telepon']); ?></td>
                                         <td><?php echo htmlspecialchars($customer['alamat']); ?></td>
                                         <td>
-                                            <a href="kelola_customer.php?action=delete&id=<?php echo $customer['id']; ?>" 
-                                               class="btn btn-sm btn-danger" 
-                                               onclick="return confirm('Apakah Anda yakin ingin menghapus customer ini? Semua pemesanan terkait juga akan terhapus!');">
+                                            <button class="btn btn-sm btn-primary edit-btn"
+                                                    data-id="<?php echo htmlspecialchars($customer['id']); ?>"
+                                                    data-nama="<?php echo htmlspecialchars($customer['nama']); ?>"
+                                                    data-email="<?php echo htmlspecialchars($customer['email']); ?>"
+                                                    data-telepon="<?php echo htmlspecialchars($customer['telepon']); ?>"
+                                                    data-alamat="<?php echo htmlspecialchars($customer['alamat']); ?>"
+                                                    data-toggle="modal" data-target="#editCustomerModal">
+                                                Edit
+                                            </button>
+                                            <a href="kelola_customer.php?action=delete&id=<?php echo htmlspecialchars($customer['id']); ?>"
+                                               class="btn btn-sm btn-danger" onclick="return confirm('Apakah Anda yakin ingin menghapus customer ini? Semua booking terkait (jika ada) akan terpengaruh jika customer_id dihapus dari tabel booking, atau akan dicegah jika ada booking terkait.');">
                                                 Hapus
                                             </a>
-                                            </td>
+                                        </td>
                                     </tr>
                                 <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                            <?php else: ?>
+                                <tr>
+                                    <td colspan="6" class="text-center">Tidak ada data customer.</td>
+                                </tr>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="modal fade" id="editCustomerModal" tabindex="-1" role="dialog" aria-labelledby="editCustomerModalLabel" aria-hidden="true">
+                <div class="modal-dialog" role="document">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="editCustomerModalLabel">Edit Customer</h5>
+                            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                                <span aria-hidden="true">&times;</span>
+                            </button>
+                        </div>
+                        <form action="kelola_customer.php" method="POST">
+                            <div class="modal-body">
+                                <input type="hidden" id="edit_id" name="edit_id">
+                                <div class="form-group">
+                                    <label for="edit_nama">Nama Customer:</label>
+                                    <input type="text" class="form-control" id="edit_nama" name="edit_nama" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="edit_email">Email:</label>
+                                    <input type="email" class="form-control" id="edit_email" name="edit_email" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="edit_telepon">Telepon:</label>
+                                    <input type="text" class="form-control" id="edit_telepon" name="edit_telepon">
+                                </div>
+                                <div class="form-group">
+                                    <label for="edit_alamat">Alamat:</label>
+                                    <input type="text" class="form-control" id="edit_alamat" name="edit_alamat">
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-dismiss="modal">Batal</button>
+                                <button type="submit" name="edit_customer" class="btn btn-primary">Simpan Perubahan</button>
+                            </div>
+                        </form>
                     </div>
-                <?php else: ?>
-                    <div class="alert alert-info text-center">Tidak ada data customer yang ditemukan.</div>
-                <?php endif; ?>
+                </div>
             </div>
 
         </div>
     </div>
 
-    <footer class="footer_section">
-        <div class="container">
-            <div class="row">
-                <div class="col-md-4 footer-col">
-                    <div class="footer_contact">
-                        <h4>Contact Us</h4>
-                        <div class="contact_link_box">
-                            <a href=""><i class="fa fa-map-marker" aria-hidden="true"></i><span>Universitas PGRI Sumatera Barat Convention Center, Gn. Pangilun, Kec. Padang Utara, Kota Padang, Sumatera Barat 25173</span></a>
-                            <a href=""><i class="fa fa-phone" aria-hidden="true"></i><span>Call +01 1234567890</span></a>
-                            <a href=""><i class="fa fa-envelope" aria-hidden="true"></i><span>scc@gmail.com</span></a>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4 footer-col">
-                    <div class="footer_detail">
-                        <a href="" class="footer-logo">SCC</a>
-                        <p>Pilihan yang tepat untuk Gedung Pesta Perkawinan, Seminar, Ujian, Wisuda dan Event Lainnya.</p>
-                        <div class="footer_social">
-                            <a href=""><i class="fa fa-facebook" aria-hidden="true"></i></a>
-                            <a href=""><i class="fa fa-twitter" aria-hidden="true"></i></a>
-                            <a href=""><i class="fa fa-linkedin" aria-hidden="true"></i></a>
-                            <a href=""><i class="fa fa-instagram" aria-hidden="true"></i></a>
-                            <a href=""><i class="fa fa-pinterest" aria-hidden="true"></i></a>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4 footer-col">
-                    <h4>Opening Hours</h4>
-                    <p>Everyday</p>
-                    <p>10.00 Am -10.00 Pm</p>
-                </div>
-            </div>
-            <div class="footer-info">
-                <p>&copy; <span id="displayYear"></span> All Rights Reserved By &copy; <span id="displayYear"></span> Distributed By <a href="https://themewagon.com/" target="_blank">ThemeWagon</a></p>
-            </div>
-        </div>
-    </footer>
+    
     <script src="../js/jquery-3.4.1.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js"></script>
     <script src="../js/bootstrap.js"></script>
     <script src="../js/custom.js"></script>
     <script>
         document.getElementById('displayYear').innerText = new Date().getFullYear();
+
+        // JavaScript untuk mengisi data ke modal edit
+        $(document).on('click', '.edit-btn', function() {
+            var id = $(this).data('id');
+            var nama = $(this).data('nama');
+            var email = $(this).data('email');
+            var telepon = $(this).data('telepon');
+            var alamat = $(this).data('alamat');
+
+            $('#edit_id').val(id);
+            $('#edit_nama').val(nama);
+            $('#edit_email').val(email);
+            $('#edit_telepon').val(telepon);
+            $('#edit_alamat').val(alamat);
+        });
     </script>
 </body>
 </html>

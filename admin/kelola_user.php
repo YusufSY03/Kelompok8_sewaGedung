@@ -34,72 +34,117 @@ if (isset($_POST['add_user'])) {
         $stmt_check->store_result();
 
         if ($stmt_check->num_rows > 0) {
-            $pesan = "Username sudah ada. Mohon gunakan username lain.";
+            $pesan = "Username sudah ada. Gunakan username lain.";
             $pesan_tipe = "danger";
         } else {
-            // Masukkan data pengguna baru ke database
-            $stmt_insert = $conn->prepare("INSERT INTO user (username, email, password, role) VALUES (?, ?, ?, ?)");
-            // Diasumsikan kolom 'role' ada di tabel 'user'
-            $stmt_insert->bind_param("ssss", $new_username, $new_email, $hashed_password, $new_role);
+            $stmt = $conn->prepare("INSERT INTO user (username, email, password, role) VALUES (?, ?, ?, ?)");
+            $stmt->bind_param("ssss", $new_username, $new_email, $hashed_password, $new_role);
 
-            if ($stmt_insert->execute()) {
-                $pesan = "User berhasil ditambahkan!";
+            if ($stmt->execute()) {
+                $pesan = "User baru berhasil ditambahkan!";
                 $pesan_tipe = "success";
             } else {
-                $pesan = "Error: " . $stmt_insert->error;
+                $pesan = "Gagal menambahkan user: " . $stmt->error;
                 $pesan_tipe = "danger";
             }
-            $stmt_insert->close();
+            $stmt->close();
         }
         $stmt_check->close();
     }
 }
 
-// Logika untuk menghapus user
-if (isset($_GET['action']) && $_GET['action'] == 'delete' && isset($_GET['username'])) {
-    $user_to_delete = htmlspecialchars($_GET['username']);
+// Logika untuk mengupdate user
+if (isset($_POST['edit_user'])) {
+    $edit_username = trim($_POST['edit_username']);
+    $edit_email = trim($_POST['edit_email']);
+    $edit_role = $_POST['edit_role'];
+    $edit_password = $_POST['edit_password']; // Opsional, bisa kosong jika tidak diubah
 
-    // Mencegah superadmin menghapus dirinya sendiri
-    if ($user_to_delete === $username_logged_in) {
-        $pesan = "Anda tidak dapat menghapus akun Anda sendiri.";
+    if (empty($edit_username) || empty($edit_email) || empty($edit_role)) {
+        $pesan = "Username, Email, dan Role harus diisi!";
         $pesan_tipe = "danger";
     } else {
-        // Cek apakah user yang akan dihapus memiliki role superadmin
-        $stmt_check_role = $conn->prepare("SELECT role FROM user WHERE username = ?");
-        $stmt_check_role->bind_param("s", $user_to_delete);
-        $stmt_check_role->execute();
-        $stmt_check_role->bind_result($target_role);
-        $stmt_check_role->fetch();
-        $stmt_check_role->close();
+        // Cek apakah email sudah terdaftar untuk user lain (jika email diubah)
+        $stmt_check_email = $conn->prepare("SELECT username FROM user WHERE email = ? AND username != ?");
+        $stmt_check_email->bind_param("ss", $edit_email, $edit_username);
+        $stmt_check_email->execute();
+        $stmt_check_email->store_result();
+        if ($stmt_check_email->num_rows > 0) {
+            $pesan = "Email sudah terdaftar untuk user lain. Gunakan email lain.";
+            $pesan_tipe = "danger";
+        } else {
+            $sql_update = "UPDATE user SET email = ?, role = ?";
+            if (!empty($edit_password)) {
+                $hashed_password = password_hash($edit_password, PASSWORD_DEFAULT);
+                $sql_update .= ", password = ?";
+            }
+            $sql_update .= " WHERE username = ?";
 
-        // Hanya superadmin yang bisa menghapus user lain atau admin
-        if ($role_logged_in === 'superadmin' || ($role_logged_in === 'admin' && $target_role !== 'superadmin')) { // <-- Perbaikan logika di sini
-            $stmt_delete = $conn->prepare("DELETE FROM user WHERE username = ?");
-            $stmt_delete->bind_param("s", $user_to_delete);
+            $stmt = $conn->prepare($sql_update);
 
-            if ($stmt_delete->execute()) {
-                $pesan = "User berhasil dihapus.";
+            if (!empty($edit_password)) {
+                $stmt->bind_param("ssss", $edit_email, $edit_role, $hashed_password, $edit_username);
+            } else {
+                $stmt->bind_param("sss", $edit_email, $edit_role, $edit_username);
+            }
+
+            if ($stmt->execute()) {
+                $pesan = "Data user berhasil diperbarui!";
                 $pesan_tipe = "success";
             } else {
-                $pesan = "Gagal menghapus user: " . $stmt_delete->error;
+                $pesan = "Gagal memperbarui user: " . $stmt->error;
                 $pesan_tipe = "danger";
             }
-            $stmt_delete->close();
-        } else {
-            $pesan = "Anda tidak memiliki izin untuk menghapus user ini.";
-            $pesan_tipe = "danger";
+            $stmt->close();
         }
+        $stmt_check_email->close();
     }
 }
 
 
-// Ambil semua data user dari database
-$sql = "SELECT username, email, role FROM user";
-$result = $conn->query($sql);
+// Logika untuk menghapus user
+if (isset($_GET['action']) && $_GET['action'] == 'delete' && isset($_GET['username'])) {
+    $delete_username = $_GET['username'];
 
+    // Cek apakah user memiliki booking terkait
+    $stmt_check_booking = $conn->prepare("SELECT COUNT(*) FROM booking WHERE user_username = ?");
+    $stmt_check_booking->bind_param("s", $delete_username);
+    $stmt_check_booking->execute();
+    $stmt_check_booking->bind_result($booking_count);
+    $stmt_check_booking->fetch();
+    $stmt_check_booking->close();
+
+    if ($booking_count > 0) {
+        $pesan = "Gagal menghapus user: User ini memiliki booking terkait. Harap hapus booking terkait terlebih dahulu.";
+        $pesan_tipe = "danger";
+    } else if ($delete_username == $_SESSION['username']) {
+        $pesan = "Anda tidak bisa menghapus akun Anda sendiri!";
+        $pesan_tipe = "danger";
+    } else if ($delete_username == 'superadmin' && $role_logged_in == 'superadmin') { // Mencegah superadmin menghapus akun superadmin default
+        $pesan = "Akun superadmin default tidak bisa dihapus.";
+        $pesan_tipe = "danger";
+    }
+    else {
+        $stmt = $conn->prepare("DELETE FROM user WHERE username = ?");
+        $stmt->bind_param("s", $delete_username);
+        if ($stmt->execute()) {
+            $pesan = "User berhasil dihapus!";
+            $pesan_tipe = "success";
+        } else {
+            $pesan = "Gagal menghapus user: " . $stmt->error;
+            $pesan_tipe = "danger";
+        }
+        $stmt->close();
+    }
+}
+
+
+// Ambil semua data user
+$sql = "SELECT username, email, role FROM user ORDER BY username ASC";
+$result = $conn->query($sql);
 $users = [];
-if ($result && $result->num_rows > 0) {
-    while($row = $result->fetch_assoc()) {
+if ($result->num_rows > 0) {
+    while ($row = $result->fetch_assoc()) {
         $users[] = $row;
     }
 }
@@ -112,205 +157,264 @@ $conn->close();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kelola User - Admin</title>
+    <title>Kelola User - SCC Admin</title>
     <link rel="stylesheet" type="text/css" href="../css/bootstrap.css" />
     <link href="../css/font-awesome.min.css" rel="stylesheet" />
     <link href="../css/style.css" rel="stylesheet" />
     <link href="../css/responsive.css" rel="stylesheet" />
     <style>
-        .alert {
-            padding: 10px;
-            margin-bottom: 20px;
-            border-radius: 5px;
-        }
-        .alert-success {
-            background-color: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        .alert-danger {
-            background-color: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        .sidebar {
-            height: 100%;
-            width: 250px;
-            position: fixed;
-            top: 0;
-            left: 0;
-            background-color: #333;
-            padding-top: 60px;
-            color: white;
-        }
-        .sidebar a {
-            padding: 10px 15px;
-            text-decoration: none;
-            font-size: 18px;
-            color: white;
-            display: block;
-        }
-        .sidebar a:hover {
-            background-color: #575757;
-        }
-        .sidebar .active {
-            background-color: #007bff;
-        }
-        .content {
-            margin-left: 260px; /* Sesuaikan dengan lebar sidebar */
-            padding: 20px;
-        }
-        .card {
-            background-color: #fff;
+        body { background-color: #f8f9fa; }
+        .wrapper { display: flex; }
+        .sidebar { width: 250px; height: 100vh; background-color: #343a40; padding-top: 20px; color: white; position: fixed; } /* Fixed sidebar */
+        .sidebar a { color: white; padding: 10px 15px; text-decoration: none; display: block; }
+        .sidebar a:hover { background-color: #007bff; }
+        .content { flex-grow: 1; padding: 20px; margin-left: 250px; } /* Adjust content margin for fixed sidebar */
+        .navbar { background-color: #ffffff; border-bottom: 1px solid #dee2e6; }
+        .info-section { /* Container umum untuk form dan tabel */
+            background-color: #ffffff;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,.1);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             padding: 20px;
             margin-bottom: 20px;
         }
-        .card h3 {
-            margin-bottom: 20px;
-            color: #333;
+        .info-section h4 {
+            color: #343a40;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 5px;
         }
-        .table-responsive {
-            margin-top: 20px;
+        /* Tambahan styling untuk pesan notifikasi */
+        .alert-custom {
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-radius: 0.25rem;
+            font-weight: bold;
+        }
+        .alert-success-custom {
+            color: #155724;
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+        }
+        .alert-danger-custom {
+            color: #721c24;
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+        }
+        .table thead th {
+            background-color: #007bff;
+            color: white;
+        }
+        .table-striped tbody tr:nth-of-type(odd) {
+            background-color: rgba(0, 123, 255, 0.05);
+        }
+        .btn-custom-add {
+            background-color: #28a745;
+            color: white;
+        }
+        .btn-custom-add:hover {
+            background-color: #218838;
+            color: white;
         }
     </style>
 </head>
-<body>
-    <div class="sidebar">
-        <a href="dashboard_admin.php">Dashboard</a>
-        <a href="kelola_pemesanan.php">Kelola Pemesanan</a>
-        <a href="kelola_customer.php">Kelola Customer</a>
-        <?php if ($role_logged_in === 'superadmin'): ?>
-            <a href="kelola_user.php" class="active">Kelola User</a>
-        <?php endif; ?>
-        <a href="../logout.php">Logout</a>
+<body class="sub_page">
+
+    <div class="hero_area">
+        <header class="header_section">
+            <div class="container-fluid">
+                <nav class="navbar navbar-expand-lg custom_nav-container ">
+                    <a class="navbar-brand" href="dashboard_admin.php">
+                        <span>SCC Admin</span>
+                    </a>
+
+                    <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarSupportedContent" aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
+                        <span class=""> </span>
+                    </button>
+
+                    <div class="collapse navbar-collapse" id="navbarSupportedContent">
+                        <ul class="navbar-nav  mx-auto">
+                        </ul>
+                        <div class="user_option">
+                            <a href="#" class="user_link">
+                                <i class="fa fa-user" aria-hidden="true"></i> <?php echo $username_logged_in; ?> (<?php echo ucfirst($role_logged_in); ?>)
+                            </a>
+                            <a href="../logout.php" class="order_online">
+                                Logout
+                            </a>
+                        </div>
+                    </div>
+                </nav>
+            </div>
+        </header>
     </div>
 
-    <div class="content">
-        <div class="container-fluid">
-            <h2 class="mt-4 mb-4">Kelola User</h2>
-            <p>Selamat datang, <?php echo $username_logged_in; ?> (Role: <?php echo $role_logged_in; ?>)</p>
+    <div class="wrapper">
+        <nav id="sidebar" class="sidebar">
+            <ul class="list-unstyled components">
+                <li><a href="dashboard_admin.php">Dashboard</a></li>
+                <li><a href="kelola_pemesanan.php">Kelola Pemesanan</a></li>
+                <li><a href="kelola_customer.php">Kelola Customer</a></li>
+                <?php if ($role_logged_in == 'superadmin'): ?>
+                <li><a href="kelola_user.php">Kelola User</a></li>
+                <?php endif; ?>
+            </ul>
+        </nav>
 
-            <?php if (!empty($pesan)) : ?>
-                <div class="alert alert-<?php echo $pesan_tipe; ?> text-center">
+        <div id="content" class="content">
+            <h2 class="mb-4">Kelola User</h2>
+
+            <?php if (!empty($pesan)): ?>
+                <div class="alert alert-dismissible fade show alert-custom alert-<?php echo $pesan_tipe; ?>-custom" role="alert">
                     <?php echo $pesan; ?>
+                    <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
                 </div>
             <?php endif; ?>
 
-            <div class="card mb-4">
-                <h3>Tambah User Baru</h3>
-                <form action="kelola_user.php" method="POST">
-                    <input type="hidden" name="add_user" value="1">
-                    <div class="form-group">
-                        <label for="username">Username:</label>
-                        <input type="text" id="username" name="username" class="form-control" required>
+            <div class="info-section mt-4">
+                <h4>Tambah User Baru</h4>
+                <form action="kelola_user.php" method="POST" class="mb-4">
+                    <div class="form-row">
+                        <div class="form-group col-md-6">
+                            <label for="username">Username:</label>
+                            <input type="text" class="form-control" id="username" name="username" required>
+                        </div>
+                        <div class="form-group col-md-6">
+                            <label for="email">Email:</label>
+                            <input type="email" class="form-control" id="email" name="email" required>
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label for="email">Email:</label>
-                        <input type="email" id="email" name="email" class="form-control" required>
+                    <div class="form-row">
+                        <div class="form-group col-md-6">
+                            <label for="password">Password:</label>
+                            <input type="password" class="form-control" id="password" name="password" required>
+                        </div>
+                        <div class="form-group col-md-6">
+                            <label for="role">Role:</label>
+                            <select class="form-control" id="role" name="role" required>
+                                <option value="user">User</option>
+                                <option value="admin">Admin</option>
+                                <?php if ($role_logged_in == 'superadmin'): ?>
+                                    <option value="superadmin">Superadmin</option>
+                                <?php endif; ?>
+                            </select>
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label for="password">Password:</label>
-                        <input type="password" id="password" name="password" class="form-control" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="role">Role:</label>
-                        <select id="role" name="role" class="form-control" required>
-                            <option value="admin">Admin</option>
-                            <option value="superadmin">Superadmin</option>
-                        </select>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Tambah User</button>
+                    <button type="submit" name="add_user" class="btn btn-custom-add">Tambah User</button>
                 </form>
             </div>
 
-            <div class="card">
-                <h3>Daftar User</h3>
-                <?php if (!empty($users)): ?>
-                    <div class="table-responsive">
-                        <table class="table table-bordered table-hover">
-                            <thead class="thead-dark">
-                                <tr>
-                                    <th>Username</th>
-                                    <th>Email</th>
-                                    <th>Role</th>
-                                    <th>Aksi</th>
-                                </tr>
-                            </thead>
-                            <tbody>
+            <div class="info-section mt-4">
+                <h4>Daftar User</h4>
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>Username</th>
+                                <th>Email</th>
+                                <th>Role</th>
+                                <th>Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php if (!empty($users)): ?>
                                 <?php foreach ($users as $user): ?>
                                     <tr>
                                         <td><?php echo htmlspecialchars($user['username']); ?></td>
                                         <td><?php echo htmlspecialchars($user['email']); ?></td>
-                                        <td><?php echo htmlspecialchars($user['role']); ?></td>
+                                        <td><?php echo ucfirst(htmlspecialchars($user['role'])); ?></td>
                                         <td>
-                                            <?php if ($user['username'] !== $username_logged_in): // Tidak bisa menghapus akun sendiri ?>
-                                                <a href="kelola_user.php?action=delete&username=<?php echo htmlspecialchars($user['username']); ?>"
-                                                   class="btn btn-sm btn-danger"
-                                                   onclick="return confirm('Apakah Anda yakin ingin menghapus user <?php echo htmlspecialchars($user['username']); ?>? Ini akan menghapus semua booking yang dipesan oleh user ini (jika Foreign Key telah diatur ON DELETE CASCADE)!');">
-                                                    Hapus
-                                                </a>
-                                            <?php else: ?>
-                                                <button class="btn btn-sm btn-secondary" disabled>Hapus (Diri Sendiri)</button>
-                                            <?php endif; ?>
+                                            <button class="btn btn-sm btn-primary edit-btn"
+                                                    data-username="<?php echo htmlspecialchars($user['username']); ?>"
+                                                    data-email="<?php echo htmlspecialchars($user['email']); ?>"
+                                                    data-role="<?php echo htmlspecialchars($user['role']); ?>"
+                                                    data-toggle="modal" data-target="#editUserModal">
+                                                Edit
+                                            </button>
+                                            <a href="kelola_user.php?action=delete&username=<?php echo htmlspecialchars($user['username']); ?>"
+                                               class="btn btn-sm btn-danger"
+                                               onclick="return confirm('Apakah Anda yakin ingin menghapus user ini? Ini akan menghapus semua booking yang dibuat oleh user ini!');">
+                                                Hapus
+                                            </a>
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                            <?php else: ?>
+                                <tr>
+                                    <td colspan="4" class="text-center">Tidak ada data user.</td>
+                                </tr>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="modal fade" id="editUserModal" tabindex="-1" role="dialog" aria-labelledby="editUserModalLabel" aria-hidden="true">
+                <div class="modal-dialog" role="document">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="editUserModalLabel">Edit User</h5>
+                            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                                <span aria-hidden="true">&times;</span>
+                            </button>
+                        </div>
+                        <form action="kelola_user.php" method="POST">
+                            <div class="modal-body">
+                                <div class="form-group">
+                                    <label for="edit_username">Username:</label>
+                                    <input type="text" class="form-control" id="edit_username" name="edit_username" readonly>
+                                </div>
+                                <div class="form-group">
+                                    <label for="edit_email">Email:</label>
+                                    <input type="email" class="form-control" id="edit_email" name="edit_email" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="edit_password">New Password (isi jika ingin mengubah):</label>
+                                    <input type="password" class="form-control" id="edit_password" name="edit_password">
+                                </div>
+                                <div class="form-group">
+                                    <label for="edit_role">Role:</label>
+                                    <select class="form-control" id="edit_role" name="edit_role" required>
+                                        <option value="user">User</option>
+                                        <option value="admin">Admin</option>
+                                        <?php if ($role_logged_in == 'superadmin'): ?>
+                                            <option value="superadmin">Superadmin</option>
+                                        <?php endif; ?>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-dismiss="modal">Batal</button>
+                                <button type="submit" name="edit_user" class="btn btn-primary">Simpan Perubahan</button>
+                            </div>
+                        </form>
                     </div>
-                <?php else: ?>
-                    <div class="alert alert-info text-center">Tidak ada data user yang ditemukan.</div>
-                <?php endif; ?>
+                </div>
             </div>
 
         </div>
     </div>
 
-    <footer class="footer_section">
-        <div class="container">
-            <div class="row">
-                <div class="col-md-4 footer-col">
-                    <div class="footer_contact">
-                        <h4>Contact Us</h4>
-                        <div class="contact_link_box">
-                            <a href=""><i class="fa fa-map-marker" aria-hidden="true"></i><span>Universitas PGRI Sumatera Barat Convention Center, Gn. Pangilun, Kec. Padang Utara, Kota Padang, Sumatera Barat 25173</span></a>
-                            <a href=""><i class="fa fa-phone" aria-hidden="true"></i><span>Call +01 1234567890</span></a>
-                            <a href=""><i class="fa fa-envelope" aria-hidden="true"></i><span>scc@gmail.com</span></a>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4 footer-col">
-                    <div class="footer_detail">
-                        <a href="" class="footer-logo">SCC</a>
-                        <p>Pilihan yang tepat untuk Gedung Pesta Perkawinan, Seminar, Ujian, Wisuda dan Event Lainnya.</p>
-                        <div class="footer_social">
-                            <a href=""><i class="fa fa-facebook" aria-hidden="true"></i></a>
-                            <a href=""><i class="fa fa-twitter" aria-hidden="true"></i></a>
-                            <a href=""><i class="fa fa-linkedin" aria-hidden="true"></i></a>
-                            <a href=""><i class="fa fa-instagram" aria-hidden="true"></i></a>
-                            <a href=""><i class="fa fa-pinterest" aria-hidden="true"></i></a>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4 footer-col">
-                    <h4>Opening Hours</h4>
-                    <p>Everyday</p>
-                    <p>10.00 Am -10.00 Pm</p>
-                </div>
-            </div>
-            <div class="footer-info">
-                <p>&copy; <span id="displayYear"></span> All Rights Reserved By &copy; <span id="displayYear"></span> Distributed By <a href="https://themewagon.com/" target="_blank">ThemeWagon</a></p>
-            </div>
-        </div>
-    </footer>
+
     <script src="../js/jquery-3.4.1.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js"></script>
     <script src="../js/bootstrap.js"></script>
     <script src="../js/custom.js"></script>
     <script>
         document.getElementById('displayYear').innerText = new Date().getFullYear();
+
+        // JavaScript untuk mengisi data ke modal edit
+        $(document).on('click', '.edit-btn', function() {
+            var username = $(this).data('username');
+            var email = $(this).data('email');
+            var role = $(this).data('role');
+
+            $('#edit_username').val(username);
+            $('#edit_email').val(email);
+            $('#edit_role').val(role);
+            $('#edit_password').val(''); // Kosongkan password saat modal dibuka
+        });
     </script>
 </body>
 </html>
